@@ -242,9 +242,11 @@ func (p *Platform) Deploy(
 				return err
 			}
 
-			taskRole, err = p.SetupTaskRole(ctx, s, log, sess, src)
-			if err != nil {
-				return err
+			if p.config.TaskRoleName != "" {
+				taskRole, err = p.SetupTaskRole(ctx, s, log, sess, src)
+				if err != nil {
+					return err
+				}
 			}
 
 			logGroup, err = p.SetupLogs(ctx, s, log, sess)
@@ -670,7 +672,7 @@ func (p *Platform) Launch(
 		additionalContainers = append(additionalContainers, c)
 	}
 
-	L.Debug("registring task definition", "id", id)
+	L.Debug("registering task definition", "id", id)
 
 	var cpuShares int
 
@@ -741,11 +743,10 @@ func (p *Platform) Launch(
 
 	containerDefinitions := append([]*ecs.ContainerDefinition{&def}, additionalContainers...)
 
-	taskOut, err := ecsSvc.RegisterTaskDefinition(&ecs.RegisterTaskDefinitionInput{
+	registerTaskDefinitionInput := ecs.RegisterTaskDefinitionInput{
 		ContainerDefinitions: containerDefinitions,
 
 		ExecutionRoleArn: aws.String(executionRoleArn),
-		TaskRoleArn:      aws.String(taskRoleArn),
 		Cpu:              cpus,
 		Memory:           aws.String(mems),
 		Family:           aws.String(family),
@@ -759,7 +760,13 @@ func (p *Platform) Launch(
 				Value: aws.String(app.App),
 			},
 		},
-	})
+	}
+
+	if taskRoleArn != "" {
+		registerTaskDefinitionInput.SetTaskRoleArn(taskRoleArn)
+	}
+
+	taskOut, err := ecsSvc.RegisterTaskDefinition(&registerTaskDefinitionInput)
 
 	if err != nil {
 		return nil, err
@@ -1337,7 +1344,7 @@ type Config struct {
 }
 
 func (p *Platform) Documentation() (*docs.Documentation, error) {
-	doc, err := docs.New(docs.FromConfig(&Config{}))
+	doc, err := docs.New(docs.FromConfig(&Config{}), docs.FromFunc(p.DeployFunc()))
 	if err != nil {
 		return nil, err
 	}

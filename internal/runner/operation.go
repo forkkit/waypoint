@@ -31,9 +31,9 @@ func (r *Runner) executeJob(
 ) (*pb.Job_Result, error) {
 	// Eventually we'll need to extract the data source. For now we're
 	// just building for local exec so it is the working directory.
-	path := configpkg.Filename
-	if wd != "" {
-		path = filepath.Join(wd, path)
+	path, err := configpkg.FindPath(wd, "", false)
+	if err != nil {
+		return nil, err
 	}
 
 	// Determine the evaluation context we'll be using
@@ -117,6 +117,9 @@ func (r *Runner) executeJob(
 
 	case *pb.Job_Docs:
 		return r.executeDocsOp(ctx, log, job, project)
+
+	case *pb.Job_ConfigSync:
+		return r.executeConfigSyncOp(ctx, log, job, project)
 
 	default:
 		return nil, status.Errorf(codes.Aborted, "unknown operation %T", job.Operation)

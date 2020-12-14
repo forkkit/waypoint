@@ -171,6 +171,21 @@ func Commands(
 				baseCommand: baseCommand,
 			}, nil
 		},
+		"config source-get": func() (cli.Command, error) {
+			return &ConfigSourceGetCommand{
+				baseCommand: baseCommand,
+			}, nil
+		},
+		"config source-set": func() (cli.Command, error) {
+			return &ConfigSourceSetCommand{
+				baseCommand: baseCommand,
+			}, nil
+		},
+		"config sync": func() (cli.Command, error) {
+			return &ConfigSyncCommand{
+				baseCommand: baseCommand,
+			}, nil
+		},
 		"logs": func() (cli.Command, error) {
 			return &LogsCommand{
 				baseCommand: baseCommand,
@@ -264,7 +279,16 @@ func Commands(
 				baseCommand: baseCommand,
 			}, nil
 		},
-
+		"server snapshot": func() (cli.Command, error) {
+			return &SnapshotBackupCommand{
+				baseCommand: baseCommand,
+			}, nil
+		},
+		"server restore": func() (cli.Command, error) {
+			return &SnapshotRestoreCommand{
+				baseCommand: baseCommand,
+			}, nil
+		},
 		"plugin": func() (cli.Command, error) {
 			return &PluginCommand{
 				baseCommand: baseCommand,

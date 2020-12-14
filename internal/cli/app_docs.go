@@ -163,6 +163,9 @@ func (c *AppDocsCommand) humanize(s string) string {
 }
 
 func (c *AppDocsCommand) mdxFormat(name, ct string, doc *docs.Documentation) {
+	// we use this constnat to compare to ct for some special behavior
+	const csType = "configsourcer"
+
 	w, err := os.Create(fmt.Sprintf("./website/content/partials/components/%s-%s.mdx", ct, name))
 	if err != nil {
 		panic(err)
@@ -186,8 +189,11 @@ func (c *AppDocsCommand) mdxFormat(name, ct string, doc *docs.Documentation) {
 		fmt.Fprintf(w, "- Output: **%s**\n", dets.Output)
 	}
 
-	mappers := dets.Mappers
+	if dets.Example != "" {
+		fmt.Fprintf(w, "\n\n### Examples\n\n```hcl\n%s\n```\n", strings.TrimSpace(dets.Example))
+	}
 
+	mappers := dets.Mappers
 	if len(mappers) > 0 {
 		fmt.Fprintf(w, "\n### Mappers\n\n")
 
@@ -198,9 +204,17 @@ func (c *AppDocsCommand) mdxFormat(name, ct string, doc *docs.Documentation) {
 		}
 	}
 
-	fmt.Fprintf(w, "\n### Variables\n")
-
+	hasRequired := false
+	fmt.Fprintf(w, "\n### Required Parameters\n")
 	for _, f := range doc.Fields() {
+		if f.Optional {
+			continue
+		}
+		if !hasRequired {
+			hasRequired = true
+			fmt.Fprintf(w, "\nThese parameters are used in the [`use` stanza](/docs/waypoint-hcl/use) for this plugin.\n")
+		}
+
 		fmt.Fprintf(w, "\n#### %s\n\n", f.Field)
 
 		if f.Summary != "" {
@@ -221,9 +235,244 @@ func (c *AppDocsCommand) mdxFormat(name, ct string, doc *docs.Documentation) {
 			}
 		}
 	}
+	if !hasRequired {
+		fmt.Fprintf(w, "\nThis plugin has no required parameters.\n")
+	}
+
+	hasOptional := false
+	fmt.Fprintf(w, "\n### Optional Parameters\n")
+	for _, f := range doc.Fields() {
+		if !f.Optional {
+			continue
+		}
+		if !hasOptional {
+			hasOptional = true
+			fmt.Fprintf(w, "\nThese parameters are used in the [`use` stanza](/docs/waypoint-hcl/use) for this plugin.\n")
+		}
+
+		fmt.Fprintf(w, "\n#### %s\n\n", f.Field)
+
+		if f.Summary != "" {
+			fmt.Fprintf(w, "%s\n\n%s\n", c.humanize(f.Synopsis), c.humanize(f.Summary))
+		} else {
+			fmt.Fprintf(w, "%s\n", c.humanize(f.Synopsis))
+		}
+
+		if f.Type != "" {
+			fmt.Fprintf(w, "\n- Type: **%s**\n", f.Type)
+		}
+
+		if f.Optional {
+			fmt.Fprintf(w, "- **Optional**\n")
+
+			if f.Default != "" {
+				fmt.Fprintf(w, "- Default: %s\n", f.Default)
+			}
+		}
+	}
+	if !hasOptional {
+		fmt.Fprintf(w, "\nThis plugin has no optional parameters.\n")
+	}
+
+	if fields := doc.TemplateFields(); len(fields) > 0 {
+		fmt.Fprintf(w, "\n### Output Attributes\n")
+		fmt.Fprintf(w, "\nOutput attributes can be used in your `waypoint.hcl` as [variables](/docs/waypoint-hcl/variables) via [`artifact`](/docs/waypoint-hcl/variables/artifact) or [`deploy`](/docs/waypoint-hcl/variables/deploy).\n")
+		for _, f := range fields {
+			fmt.Fprintf(w, "\n#### %s\n\n", f.Field)
+
+			if f.Summary != "" {
+				fmt.Fprintf(w, "%s\n\n%s\n", c.humanize(f.Synopsis), c.humanize(f.Summary))
+			} else {
+				fmt.Fprintf(w, "%s\n", c.humanize(f.Synopsis))
+			}
+
+			if f.Type != "" {
+				fmt.Fprintf(w, "\n- Type: **%s**\n", f.Type)
+			}
+
+			if f.Optional {
+				fmt.Fprintf(w, "- **Optional**\n")
+
+				if f.Default != "" {
+					fmt.Fprintf(w, "- Default: %s\n", f.Default)
+				}
+			}
+		}
+	}
+}
+
+func (c *AppDocsCommand) mdxFormatConfigSourcer(name, ct string, doc *docs.Documentation) {
+	w, err := os.Create(fmt.Sprintf("./website/content/partials/components/%s-%s.mdx", ct, name))
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Fprintf(w, "## %s (%s)\n\n", name, ct)
+
+	dets := doc.Details()
+
+	if dets.Description != "" {
+		fmt.Fprintf(w, "%s\n\n", c.humanize(dets.Description))
+	}
 
 	if dets.Example != "" {
-		fmt.Fprintf(w, "\n\n### Examples\n\n```\n%s\n```\n", dets.Example)
+		fmt.Fprintf(w, "\n\n### Examples\n\n```hcl\n%s\n```\n", strings.TrimSpace(dets.Example))
+	}
+
+	mappers := dets.Mappers
+	if len(mappers) > 0 {
+		fmt.Fprintf(w, "\n### Mappers\n\n")
+
+		for _, m := range mappers {
+			fmt.Fprintf(w, "#### %s\n\n", m.Description)
+			fmt.Fprintf(w, "- Input: **%s**\n", m.Input)
+			fmt.Fprintf(w, "- Output: **%s**\n", m.Output)
+		}
+	}
+
+	hasRequired := false
+	fmt.Fprintf(w, "\n### Required Parameters\n")
+	for _, f := range doc.RequestFields() {
+		if f.Optional {
+			continue
+		}
+		if !hasRequired {
+			hasRequired = true
+			fmt.Fprintf(w, "\nThese parameters are used in `configdynamic` for [dynamic configuration syncing](/docs/app-config/dynamic).\n")
+		}
+
+		fmt.Fprintf(w, "\n#### %s\n\n", f.Field)
+
+		if f.Summary != "" {
+			fmt.Fprintf(w, "%s\n\n%s\n", c.humanize(f.Synopsis), c.humanize(f.Summary))
+		} else {
+			fmt.Fprintf(w, "%s\n", c.humanize(f.Synopsis))
+		}
+
+		if f.Type != "" {
+			fmt.Fprintf(w, "\n- Type: **%s**\n", f.Type)
+		}
+
+		if f.Optional {
+			fmt.Fprintf(w, "- **Optional**\n")
+
+			if f.Default != "" {
+				fmt.Fprintf(w, "- Default: %s\n", f.Default)
+			}
+		}
+	}
+	if !hasRequired {
+		fmt.Fprintf(w, "\nThis plugin has no required parameters.\n")
+	}
+
+	hasOptional := false
+	fmt.Fprintf(w, "\n### Optional Parameters\n")
+	for _, f := range doc.RequestFields() {
+		if !f.Optional {
+			continue
+		}
+		if !hasOptional {
+			hasOptional = true
+			fmt.Fprintf(w, "\nThese parameters are used in `configdynamic` for [dynamic configuration syncing](/docs/app-config/dynamic).\n")
+		}
+
+		fmt.Fprintf(w, "\n#### %s\n\n", f.Field)
+
+		if f.Summary != "" {
+			fmt.Fprintf(w, "%s\n\n%s\n", c.humanize(f.Synopsis), c.humanize(f.Summary))
+		} else {
+			fmt.Fprintf(w, "%s\n", c.humanize(f.Synopsis))
+		}
+
+		if f.Type != "" {
+			fmt.Fprintf(w, "\n- Type: **%s**\n", f.Type)
+		}
+
+		if f.Optional {
+			fmt.Fprintf(w, "- **Optional**\n")
+
+			if f.Default != "" {
+				fmt.Fprintf(w, "- Default: %s\n", f.Default)
+			}
+		}
+	}
+	if !hasOptional {
+		fmt.Fprintf(w, "\nThis plugin has no optional parameters.\n")
+	}
+
+	if len(doc.Fields()) > 0 {
+		fmt.Fprintf(w, "\n### Source Parameters\n\n"+
+			"The parameters below are used with `waypoint config set-source` to configure\n"+
+			"the behavior this plugin. These are _not_ used in `configdynamic` calls. The\n"+
+			"parameters used for `configdynamic` are in the previous section.\n")
+
+		hasRequired := false
+		fmt.Fprintf(w, "\n#### Required Parameters\n")
+		for _, f := range doc.Fields() {
+			if f.Optional {
+				continue
+			}
+			if !hasRequired {
+				hasRequired = true
+			}
+
+			fmt.Fprintf(w, "\n##### %s\n\n", f.Field)
+
+			if f.Summary != "" {
+				fmt.Fprintf(w, "%s\n\n%s\n", c.humanize(f.Synopsis), c.humanize(f.Summary))
+			} else {
+				fmt.Fprintf(w, "%s\n", c.humanize(f.Synopsis))
+			}
+
+			if f.Type != "" {
+				fmt.Fprintf(w, "\n- Type: **%s**\n", f.Type)
+			}
+
+			if f.Optional {
+				fmt.Fprintf(w, "- **Optional**\n")
+
+				if f.Default != "" {
+					fmt.Fprintf(w, "- Default: %s\n", f.Default)
+				}
+			}
+		}
+		if !hasRequired {
+			fmt.Fprintf(w, "\nThis plugin has no required source parameters.\n")
+		}
+
+		hasOptional := false
+		fmt.Fprintf(w, "\n#### Optional Parameters\n")
+		for _, f := range doc.Fields() {
+			if !f.Optional {
+				continue
+			}
+			if !hasOptional {
+				hasOptional = true
+			}
+
+			fmt.Fprintf(w, "\n##### %s\n\n", f.Field)
+
+			if f.Summary != "" {
+				fmt.Fprintf(w, "%s\n\n%s\n", c.humanize(f.Synopsis), c.humanize(f.Summary))
+			} else {
+				fmt.Fprintf(w, "%s\n", c.humanize(f.Synopsis))
+			}
+
+			if f.Type != "" {
+				fmt.Fprintf(w, "\n- Type: **%s**\n", f.Type)
+			}
+
+			if f.Optional {
+				fmt.Fprintf(w, "- **Optional**\n")
+
+				if f.Default != "" {
+					fmt.Fprintf(w, "- Default: %s\n", f.Default)
+				}
+			}
+		}
+		if !hasOptional {
+			fmt.Fprintf(w, "\nThis plugin has no optional source parameters.\n")
+		}
 	}
 }
 
@@ -348,6 +597,7 @@ func (c *AppDocsCommand) builtinMDX(args []string) int {
 		component.RegistryType,
 		component.PlatformType,
 		component.ReleaseManagerType,
+		component.ConfigSourcerType,
 	}
 
 	docfactories := map[component.Type]*factory.Factory{}
@@ -376,6 +626,7 @@ func (c *AppDocsCommand) builtinMDX(args []string) int {
 		{docfactories[component.RegistryType], "registry"},
 		{docfactories[component.PlatformType], "platform"},
 		{docfactories[component.ReleaseManagerType], "releasemanager"},
+		{docfactories[component.ConfigSourcerType], "configsourcer"},
 	}
 
 	for _, f := range factories {
@@ -404,7 +655,13 @@ func (c *AppDocsCommand) builtinMDX(args []string) int {
 				continue
 			}
 
-			c.mdxFormat(t, f.t, doc)
+			switch f.t {
+			case "configsourcer":
+				c.mdxFormatConfigSourcer(t, f.t, doc)
+
+			default:
+				c.mdxFormat(t, f.t, doc)
+			}
 		}
 	}
 
@@ -447,7 +704,7 @@ func (c *AppDocsCommand) funcsMDX() int {
 	for _, k := range keys {
 		fn := all[k]
 
-		fmt.Fprintf(w, "# `%s` Function\n\n", k)
+		fmt.Fprintf(w, "## `%s`\n\n", k)
 
 		var (
 			args     []string
@@ -478,7 +735,7 @@ func (c *AppDocsCommand) funcsMDX() int {
 
 		fmt.Fprintf(w, "```hcl\n%s(%s) %s\n```\n\n", k, strings.Join(args, ", "), rt.FriendlyName())
 		if d, ok := docs[k]; ok {
-			fmt.Fprintf(w, "`%s`: %s\n\n", k, d)
+			fmt.Fprintf(w, "%s\n\n", d)
 		}
 	}
 

@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/go-argmapper"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/hcl/v2"
+	"github.com/zclconf/go-cty/cty"
 
 	"github.com/hashicorp/waypoint-plugin-sdk/component"
 	"github.com/hashicorp/waypoint/internal/config"
@@ -25,10 +26,25 @@ func (a *App) Deploy(ctx context.Context, push *pb.PushedArtifact) (*pb.Deployme
 
 	// Add our build to our config
 	var evalCtx hcl.EvalContext
+	evalCtx.Variables = map[string]cty.Value{}
 	if err := evalCtxTemplateProto(&evalCtx, "artifact", push); err != nil {
 		a.logger.Warn("failed to prepare template variables, will not be available",
 			"err", err)
 	}
+
+	// Build our deployment config and expose the env we need to the config
+	deployConfig := &component.DeploymentConfig{
+		ServerAddr:          resp.ServerAddr,
+		ServerTls:           resp.ServerTls,
+		ServerTlsSkipVerify: resp.ServerTlsSkipVerify,
+	}
+	deployEnv := map[string]cty.Value{}
+	for k, v := range deployConfig.Env() {
+		deployEnv[k] = cty.StringVal(v)
+	}
+	evalCtx.Variables["entrypoint"] = cty.ObjectVal(map[string]cty.Value{
+		"env": cty.MapVal(deployEnv),
+	})
 
 	// Render the config
 	c, err := componentCreatorMap[component.PlatformType].Create(ctx, a, &evalCtx)
@@ -38,13 +54,9 @@ func (a *App) Deploy(ctx context.Context, push *pb.PushedArtifact) (*pb.Deployme
 	defer c.Close()
 
 	_, msg, err := a.doOperation(ctx, a.logger.Named("deploy"), &deployOperation{
-		Component: c,
-		Push:      push,
-		DeploymentConfig: &component.DeploymentConfig{
-			ServerAddr:          resp.ServerAddr,
-			ServerTls:           resp.ServerTls,
-			ServerTlsSkipVerify: resp.ServerTlsSkipVerify,
-		},
+		Component:        c,
+		Push:             push,
+		DeploymentConfig: deployConfig,
 	})
 	if err != nil {
 		return nil, err
@@ -139,10 +151,14 @@ func (op *deployOperation) Upsert(
 }
 
 func (op *deployOperation) Do(ctx context.Context, log hclog.Logger, app *App, _ proto.Message) (interface{}, error) {
+	// Sync our config first
+	if err := app.ConfigSync(ctx); err != nil {
+		return nil, err
+	}
+
 	dconfig := *op.DeploymentConfig
 	dconfig.Id = op.id
 	dconfig.EntrypointInviteToken = op.cebToken
-
 	return app.callDynamicFunc(ctx,
 		log,
 		(*component.Deployment)(nil),

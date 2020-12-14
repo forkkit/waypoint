@@ -21,6 +21,7 @@ type validateStruct struct {
 	Labels  map[string]string `hcl:"labels,optional"`
 	Plugin  []*Plugin         `hcl:"plugin,block"`
 	Apps    []*validateApp    `hcl:"app,block"`
+	Config  *genericConfig    `hcl:"config,block"`
 }
 
 type validateApp struct {
@@ -31,6 +32,7 @@ type validateApp struct {
 	Build   *Build            `hcl:"build,block"`
 	Deploy  *Deploy           `hcl:"deploy,block"`
 	Release *Release          `hcl:"release,block"`
+	Config  *genericConfig    `hcl:"config,block"`
 }
 
 // Validate the structure of the configuration.

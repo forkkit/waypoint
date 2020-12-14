@@ -38,7 +38,7 @@ func (c *baseCommand) initConfig(optional bool) (*configpkg.Config, error) {
 
 // initConfigPath returns the configuration path to load.
 func (c *baseCommand) initConfigPath() (string, error) {
-	path, err := configpkg.FindPath("", "")
+	path, err := configpkg.FindPath("", "", true)
 	if err != nil {
 		return "", fmt.Errorf("Error looking for a Waypoint configuration: %s", err)
 	}
@@ -92,7 +92,7 @@ func (c *baseCommand) initClient() (*clientpkg.Project, error) {
 		clientpkg.WithLabels(c.flagLabels),
 		clientpkg.WithSourceOverrides(c.flagRemoteSource),
 	}
-	if !c.flagRemote {
+	if !c.flagRemote && c.autoServer {
 		opts = append(opts, clientpkg.WithLocal())
 	}
 

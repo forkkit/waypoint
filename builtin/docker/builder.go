@@ -50,7 +50,10 @@ type BuilderConfig struct {
 }
 
 func (b *Builder) Documentation() (*docs.Documentation, error) {
-	doc, err := docs.New(docs.FromConfig(&BuilderConfig{}))
+	doc, err := docs.New(
+		docs.FromConfig(&BuilderConfig{}),
+		docs.FromFunc(b.BuildFunc()),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +69,6 @@ build {
 }
 `)
 
-	doc.Input("component.Source")
 	doc.Output("docker.Image")
 
 	doc.SetField(
@@ -128,6 +130,9 @@ func (b *Builder) Build(
 	cli.NegotiateAPIVersion(ctx)
 
 	dockerfile := b.config.Dockerfile
+	if dockerfile == "" {
+		dockerfile = "Dockerfile"
+	}
 	if !filepath.IsAbs(dockerfile) {
 		dockerfile = filepath.Join(src.Path, dockerfile)
 	}

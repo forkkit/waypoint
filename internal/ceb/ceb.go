@@ -14,9 +14,15 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/hashicorp/waypoint/internal/pkg/gatedwriter"
+	"github.com/hashicorp/waypoint/internal/plugin"
 	"github.com/hashicorp/waypoint/internal/server"
 	pb "github.com/hashicorp/waypoint/internal/server/gen"
 	"github.com/hashicorp/waypoint/internal/version"
+
+	pluginAWSSSM "github.com/hashicorp/waypoint/builtin/aws/ssm"
+	pluginK8s "github.com/hashicorp/waypoint/builtin/k8s"
+	pluginVault "github.com/hashicorp/waypoint/builtin/vault"
 )
 
 const (
@@ -37,9 +43,29 @@ const (
 type CEB struct {
 	id           string
 	deploymentId string
-	logger       hclog.Logger
 	context      context.Context
 	execIdx      int64
+
+	// stateCond and its associated locker are used to protect all the
+	// state-prefixed fields. These state fields can be watched using this
+	// cond for state changes in the CEB. Anyone waiting on stateCond should
+	// also verify the context didn't cancel. The stateCond will be broadcasted
+	// when the root context cancels.
+	stateCond       *sync.Cond
+	stateConfig     bool // config stream is connected
+	stateChildReady bool // ready to start child command
+	stateExit       bool // true when exiting
+
+	// logger is the logger that should be used internally. Log messages
+	// sent here with the proper log level (Info or higher) will also be
+	// streamed to the server.
+	logger hclog.Logger
+
+	// logCh can be sent entries that will be sent to the server. If the
+	// server connection is severed or too many entries are sent, some may
+	// be dropped but the channel should always be consumed.
+	logCh          chan *pb.LogBatch_Entry
+	logGatedWriter *gatedwriter.Writer
 
 	// clientMu must be held anytime reading/writing client. internally
 	// you probably want to use waitClient() instead of this directly.
@@ -55,25 +81,24 @@ type CEB struct {
 	// commands will stop the old command first. Values sent here are coalesced
 	// in case many changes are sent in a row.
 	childCmdCh chan<- *exec.Cmd
-	childInit  uint32
-
-	// childReadyCh should be closed exactly once (and set to nil) when the
-	// FIRST child command is ready to be started. This can be closed before
-	// any command is sent to childCmdCh. It indicates that the child process
-	// watcher can begin executing.
-	childReadyCh chan struct{}
 
 	// childCmdBase is the base command to use for making any changes to the
 	// child; use the copyCmd() function to copy this safetly to make changes.
 	// Do not write to this directly.
 	childCmdBase *exec.Cmd
 
-	closedVal   uint32
+	closedVal   *uint32
 	cleanupFunc func()
 
 	urlAgentMu     sync.Mutex
 	urlAgentCtx    context.Context
 	urlAgentCancel func()
+
+	//---------------------------------------------------------------
+	// Config sourcing
+
+	// configPlugins is the mapping of config source type to launched plugin.
+	configPlugins map[string]*plugin.Instance
 }
 
 // Run runs a CEB with the given options.
@@ -91,12 +116,32 @@ func Run(ctx context.Context, os ...Option) error {
 
 	// Defaults, initialization
 	ceb := &CEB{
-		id:      id,
-		logger:  hclog.L(),
-		context: ctx,
+		id:            id,
+		context:       ctx,
+		configPlugins: map[string]*plugin.Instance{},
+		stateCond:     sync.NewCond(&sync.Mutex{}),
+
+		// for our atomic ops, we just use new() rather than addr operators (&)
+		// so that we can be sure that the 64-bit alignment requirement is correct
+		closedVal: new(uint32),
 	}
 	ceb.clientCond = sync.NewCond(&ceb.clientMu)
 	defer ceb.Close()
+
+	// Setup our default config sourcers.
+	// NOTE(mitchellh): In the future, we will dynamically load these via
+	// a plugin system, Initially, we hardcode what we support.
+	ceb.configPlugins = map[string]*plugin.Instance{
+		"aws-ssm": {
+			Component: &pluginAWSSSM.ConfigSourcer{},
+		},
+		"kubernetes": {
+			Component: &pluginK8s.ConfigSourcer{},
+		},
+		"vault": {
+			Component: &pluginVault.ConfigSourcer{},
+		},
+	}
 
 	// Set our options
 	var cfg config
@@ -106,6 +151,14 @@ func Run(ctx context.Context, os ...Option) error {
 			return err
 		}
 	}
+
+	// Setup our system logger
+	ceb.initSystemLogger()
+
+	// We replace the default hclog logger with our own so that all those
+	// logs also appear in the log streaming output. We don't expect anything
+	// to be using hclog.L() but this is there just in case it does.
+	hclog.SetDefault(ceb.logger)
 
 	// We're disabled also if we have no client set and the server address is empty.
 	// This means we have nothing to connect to.
@@ -145,17 +198,45 @@ func Run(ctx context.Context, os ...Option) error {
 
 	case <-ctx.Done():
 		ceb.logger.Info("received cancellation request, waiting for child to exit")
+
+		// Perform a state condition broadcast. Everyone blocking on state
+		// changes should also be watching for stateExit or context cancellation.
+		ceb.setState(&ceb.stateExit, true)
+
+		// Wait for the child to end
 		<-ceb.childDoneCh
 	}
 
 	return nil
 }
 
+// waitState waits for the given state boolean to go true. This boolean
+// must be a pointer to a state field on ceb. This will also return if
+// stateExit flips true. The return value notes whether we should exit.
+func (ceb *CEB) waitState(state *bool, v bool) (exit bool) {
+	ceb.stateCond.L.Lock()
+	defer ceb.stateCond.L.Unlock()
+	for *state != v && !ceb.stateExit {
+		ceb.stateCond.Wait()
+	}
+
+	return ceb.stateExit
+}
+
+// setState sets the value of a state var on the ceb struct and broadcasts
+// the condition variable.
+func (ceb *CEB) setState(state *bool, v bool) {
+	ceb.stateCond.L.Lock()
+	defer ceb.stateCond.L.Unlock()
+	*state = v
+	ceb.stateCond.Broadcast()
+}
+
 // Close cleans up any resources created by the CEB and should be called
 // to gracefully exit.
 func (ceb *CEB) Close() error {
 	// Only close ones
-	if !atomic.CompareAndSwapUint32(&ceb.closedVal, 0, 1) {
+	if !atomic.CompareAndSwapUint32(ceb.closedVal, 0, 1) {
 		return nil
 	}
 
@@ -168,7 +249,7 @@ func (ceb *CEB) Close() error {
 
 // closed returns true if Close was called
 func (ceb *CEB) closed() bool {
-	return atomic.LoadUint32(&ceb.closedVal) != 0
+	return atomic.LoadUint32(ceb.closedVal) != 0
 }
 
 // cleanup stacks cleanup functions to call when Close is called.
